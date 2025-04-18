@@ -17,11 +17,15 @@
 <body>
   <canvas id="gameCanvas" width="800" height="600"></canvas>
   <div id="overlay"></div>
+  <!-- Background music -->
+  <audio id="bgm" src="music.mp3" loop></audio>
   <script>
   (function() {
     const canvas = document.getElementById('gameCanvas');
     const ctx    = canvas.getContext('2d');
     const overlay = document.getElementById('overlay');
+    const bgm = document.getElementById('bgm');
+    let musicFading = false;
     const W = canvas.width, H = canvas.height;
 
     // Star field
@@ -65,6 +69,11 @@
       if(o.y >  H+o.r) o.y = -o.r;
     }
     function distance(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
+
+    // Explosion helper
+    function explode(x,y,r,color='white') {
+      explosions.push({ x, y, r, color, ttl: 30 });
+    }
 
     function createAsteroid(x,y,size) {
       const r = size*15 + 10;
@@ -112,12 +121,10 @@
       ship.canShoot = false;
     }
 
-    // Generic explosion: specify radius and ttl
-    function explode(x,y,r) {
-      explosions.push({ x, y, r, ttl: 30 });
-    }
-
     function update() {
+      // Play music on start
+      if (!musicFading && bgm.paused) bgm.play();
+
       // Update stars
       stars.forEach(s => s.phase += s.speed);
 
@@ -132,7 +139,7 @@
         ship.x += ship.vx; ship.y += ship.vy;
         wrap(ship);
 
-        // Update bullets with trail
+        // Update bullets
         bullets = bullets.filter(b => b.ttl > 0);
         bullets.forEach(b => {
           b.history.unshift({ x: b.x, y: b.y, alpha: b.ttl/40 });
@@ -144,13 +151,12 @@
         // Update asteroids
         asteroids.forEach(a => { a.x += a.vx; a.y += a.vy; a.angle += a.spin; wrap(a); });
 
-        // Bullet-asteroid collisions and explosion
+        // Bullet-asteroid collision
         for (let i = asteroids.length-1; i >= 0; i--) {
           const a = asteroids[i];
           for (let j = bullets.length-1; j >= 0; j--) {
             if (distance(a, bullets[j]) < a.r) {
-              // Explosion at asteroid
-              explode(a.x, a.y, a.r);
+              explode(a.x, a.y, a.r, 'white');
               bullets.splice(j,1);
               score += 100;
               asteroids.splice(i,1);
@@ -163,18 +169,24 @@
           }
         }
 
-        // Ship-asteroid collision and ship explosion
+        // Ship-asteroid collision
         for (let i = asteroids.length-1; i >= 0; i--) {
           const a = asteroids[i];
           if (distance(a, ship) < a.r + ship.r) {
-            // Bigger ship explosion
-            explode(ship.x, ship.y, ship.r * 2);
+            explode(ship.x, ship.y, ship.r*2, 'orange');
             lives--;
+            // Start fade out on game over
             if (lives <= 0) {
               gameOver = true;
               overlay.textContent = "GAME OVER\nPress Enter to restart";
+              if (!musicFading) {
+                musicFading = true;
+                const fadeInt = setInterval(() => {
+                  if (bgm.volume > 0.01) bgm.volume -= 0.01;
+                  else { bgm.pause(); clearInterval(fadeInt); }
+                }, 200);
+              }
             } else {
-              // Reset ship position
               ship.x = W/2; ship.y = H/2; ship.vx = 0; ship.vy = 0;
             }
             break;
@@ -193,7 +205,7 @@
     function draw() {
       ctx.clearRect(0,0,W,H);
 
-      // Draw stars
+      // Stars
       stars.forEach(s => {
         const alpha = 0.5 + Math.sin(s.phase) * 0.5;
         ctx.fillStyle = s.color;
@@ -202,34 +214,26 @@
       });
       ctx.globalAlpha = 1;
 
-      // Draw score
-      ctx.fillStyle = '#fff';
-      ctx.font = '20px sans-serif';
-      ctx.textAlign = 'left';
+      // Score
+      ctx.fillStyle = '#fff'; ctx.font = '20px sans-serif'; ctx.textAlign = 'left';
       ctx.fillText('Score: ' + score, 10, 25);
 
-      // Draw explosions
+      // Explosions
       explosions.forEach(ex => {
         const alpha = ex.ttl / 30;
         const radius = ex.r * (1 + (30 - ex.ttl) / 30);
-        ctx.beginPath();
-        ctx.arc(ex.x, ex.y, radius, 0, Math.PI*2);
-        ctx.strokeStyle = `rgba(255,255,255,${alpha})`;
-        ctx.lineWidth = 2;
-        ctx.stroke();
+        ctx.beginPath(); ctx.arc(ex.x, ex.y, radius, 0, Math.PI*2);
+        ctx.strokeStyle = ex.color === 'orange' ? `rgba(255,165,0,${alpha})` : `rgba(255,255,255,${alpha})`;
+        ctx.lineWidth = 2; ctx.stroke();
       });
 
-      // Draw ship with thrust flames
-      ctx.save();
-      ctx.translate(ship.x, ship.y);
-      ctx.rotate(ship.angle + Math.PI/2);
+      // Ship
+      ctx.save(); ctx.translate(ship.x, ship.y); ctx.rotate(ship.angle + Math.PI/2);
       if (ship.thrust) {
-        const flameW = ship.r * 0.5;
-        const flameL = ship.r;
+        const flameW = ship.r * 0.5, flameL = ship.r;
         const offsets = [ -ship.r * 0.6, ship.r * 0.6 ];
         offsets.forEach(offsetX => {
-          ctx.beginPath();
-          ctx.moveTo(offsetX, ship.r * 1.1);
+          ctx.beginPath(); ctx.moveTo(offsetX, ship.r * 1.1);
           ctx.lineTo(offsetX - flameW, ship.r * 1.1 + flameL);
           ctx.lineTo(offsetX + flameW, ship.r * 1.1 + flameL);
           ctx.closePath(); ctx.fillStyle = 'orange'; ctx.fill();
@@ -238,39 +242,30 @@
       ctx.drawImage(shipImg, -ship.r*1.5, -ship.r*1.5, ship.r*3, ship.r*3);
       ctx.restore();
 
-      // Draw plasma trails and bolts
-      bullets.forEach(b => {
-        b.history.forEach(h => {
-          ctx.beginPath(); ctx.arc(h.x, h.y, 4, 0, Math.PI*2);
-          ctx.fillStyle = `rgba(255,0,0,${h.alpha*0.5})`;
-          ctx.fill();
-        });
-      });
-      bullets.forEach(b => {
-        ctx.beginPath(); ctx.arc(b.x, b.y, 5, 0, Math.PI*2);
-        ctx.fillStyle = 'red'; ctx.fill();
-      });
+      // Plasma bullets
+      bullets.forEach(b => { b.history.forEach(h => {
+        ctx.beginPath(); ctx.arc(h.x, h.y, 4, 0, Math.PI*2);
+        ctx.fillStyle = `rgba(255,0,0,${h.alpha*0.5})`; ctx.fill();
+      }); });
+      bullets.forEach(b => { ctx.beginPath(); ctx.arc(b.x, b.y, 5, 0, Math.PI*2);
+        ctx.fillStyle = 'red'; ctx.fill(); });
 
-      // Draw asteroids
+      // Asteroids
       asteroids.forEach(a => {
-        const scale = a.size / 3;
-        const size  = a.r * 2 * scale;
-        ctx.save();
-        ctx.translate(a.x, a.y);
-        ctx.rotate(a.angle);
-        ctx.drawImage(a.img, -size/2, -size/2, size, size);
-        ctx.restore();
+        const scale = a.size / 3, size = a.r * 2 * scale;
+        ctx.save(); ctx.translate(a.x, a.y); ctx.rotate(a.angle);
+        ctx.drawImage(a.img, -size/2, -size/2, size, size); ctx.restore();
       });
 
-      // Draw remaining lives
+      // Lives
       const iconW = 30, margin = 10;
       for (let i = 0; i < lives; i++) {
         const x = W - margin - iconW*(i+1) - margin*i;
-        const y = margin;
-        ctx.drawImage(shipImg, x, y, iconW, iconW);
+        ctx.drawImage(shipImg, x, margin, iconW, iconW);
       }
     }
 
+    // Start game
     shipImg.onload = () => update();
   })();
   </script>
